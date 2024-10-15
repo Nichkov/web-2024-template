@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import 'mapbox-gl/dist/mapbox-gl.css';
 import styled from "styled-components";
@@ -14,9 +14,17 @@ import {
   FormControl,
   InputLabel,
 } from "@mui/material";
+import { MAPBOX_ACCESS_TOKEN } from './config';
 
-// Replace with your actual Mapbox access token
-mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN';
+console.log("App component is rendering");
+console.log("Mapbox Access Token:", MAPBOX_ACCESS_TOKEN);
+console.log("Mapbox GL JS version:", mapboxgl.version);
+
+if (!MAPBOX_ACCESS_TOKEN) {
+  console.error("Mapbox access token is missing!");
+}
+
+mapboxgl.accessToken = MAPBOX_ACCESS_TOKEN;
 
 interface SwimmingSpot {
   id: string;
@@ -30,45 +38,103 @@ interface SwimmingSpot {
 const AppContainer = styled.div`
   width: 100vw;
   height: 100vh;
+  position: relative;
 `;
 
 const MapContainer = styled.div`
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
   width: 100%;
   height: 100%;
 `;
 
+const DebugInfo = styled.div`
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: white;
+  padding: 10px;
+  z-index: 1000;
+`;
+
 function App() {
+  console.log("App function component is executing");
+
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
+  const mapInitializedRef = useRef(false);
   const [spots, setSpots] = useState<SwimmingSpot[]>([]);
   const [newSpot, setNewSpot] = useState<Partial<SwimmingSpot> | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [mapInitialized, setMapInitialized] = useState(false);
+  const [mapError, setMapError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (map.current) return;
+  console.log("Current state:", { spots, newSpot, isDialogOpen, mapInitialized, mapError });
 
-    map.current = new mapboxgl.Map({
-      container: mapContainer.current!,
-      style: 'mapbox://styles/mapbox/streets-v11',
-      center: [0, 0],
-      zoom: 2,
-    });
+  const initializeMap = useCallback(() => {
+    if (mapInitializedRef.current || !mapContainer.current) return;
+    console.log("Initializing map");
 
-    map.current.on('click', (e) => {
-      setNewSpot({
-        longitude: e.lngLat.lng,
-        latitude: e.lngLat.lat,
+    try {
+      map.current = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: 'mapbox://styles/mapbox/streets-v11',
+        center: [0, 0],
+        zoom: 2,
       });
-      setIsDialogOpen(true);
-    });
 
-    return () => {
-      map.current?.remove();
-    };
+      console.log("Map instance created:", map.current);
+
+      map.current.on('load', () => {
+        console.log("Map loaded successfully");
+        setMapInitialized(true);
+        mapInitializedRef.current = true;
+      });
+
+      map.current.on('error', (e) => {
+        console.error("Map error:", e);
+        setMapError(e.error.message || "An unknown error occurred");
+      });
+
+      map.current.on('click', (e) => {
+        console.log("Map clicked:", e.lngLat);
+        setNewSpot({
+          longitude: e.lngLat.lng,
+          latitude: e.lngLat.lat,
+        });
+        setIsDialogOpen(true);
+      });
+
+      console.log("Map event listeners set up");
+    } catch (error) {
+      console.error("Error initializing map:", error);
+      setMapError(error instanceof Error ? error.message : "An unknown error occurred");
+    }
   }, []);
 
   useEffect(() => {
-    spots.forEach((spot) => {
+    initializeMap();
+    return () => {
+      if (map.current && mapInitializedRef.current) {
+        console.log("Removing map");
+        map.current.remove();
+        mapInitializedRef.current = false;
+      }
+    };
+  }, [initializeMap]);
+
+  useEffect(() => {
+    console.log("Spots effect is running, spots count:", spots.length);
+    if (!map.current) {
+      console.log("Map is not initialized, skipping spots rendering");
+      return;
+    }
+
+    spots.forEach((spot, index) => {
+      console.log(`Rendering spot ${index}:`, spot);
       const el = document.createElement('div');
       el.className = 'marker';
       el.style.backgroundColor = getColorByTransparency(spot.transparency);
@@ -84,11 +150,13 @@ function App() {
             `<h3>${spot.name}</h3><p>Transparency: ${spot.transparency}m</p><p>Cleanliness: ${spot.cleanliness}</p>`
           )
         )
-        .addTo(map.current!);
+        .addTo(map.current);
+      console.log(`Spot ${index} added to map`);
     });
   }, [spots]);
 
   const handleSaveSpot = () => {
+    console.log("Saving new spot:", newSpot);
     if (newSpot && newSpot.name && newSpot.transparency && newSpot.cleanliness) {
       const spot: SwimmingSpot = {
         id: Date.now().toString(),
@@ -98,9 +166,12 @@ function App() {
         longitude: newSpot.longitude!,
         latitude: newSpot.latitude!,
       };
+      console.log("New spot created:", spot);
       setSpots([...spots, spot]);
       setIsDialogOpen(false);
       setNewSpot(null);
+    } else {
+      console.log("Cannot save spot, missing required fields");
     }
   };
 
@@ -110,8 +181,14 @@ function App() {
     return '#ff0000';
   };
 
+  console.log("Rendering App component");
   return (
     <AppContainer>
+      <DebugInfo>
+        <p>Map Initialized: {mapInitialized ? "Yes" : "No"}</p>
+        <p>Number of Spots: {spots.length}</p>
+        {mapError && <p style={{ color: 'red' }}>Error: {mapError}</p>}
+      </DebugInfo>
       <MapContainer ref={mapContainer} />
       <Dialog open={isDialogOpen} onClose={() => setIsDialogOpen(false)}>
         <DialogTitle>Add New Swimming Spot</DialogTitle>
@@ -122,7 +199,10 @@ function App() {
             label="Place Name"
             fullWidth
             value={newSpot?.name || ''}
-            onChange={(e) => setNewSpot({ ...newSpot, name: e.target.value })}
+            onChange={(e) => {
+              console.log("Updating spot name:", e.target.value);
+              setNewSpot({ ...newSpot, name: e.target.value });
+            }}
           />
           <TextField
             margin="dense"
@@ -130,13 +210,19 @@ function App() {
             type="number"
             fullWidth
             value={newSpot?.transparency || ''}
-            onChange={(e) => setNewSpot({ ...newSpot, transparency: Number(e.target.value) })}
+            onChange={(e) => {
+              console.log("Updating spot transparency:", e.target.value);
+              setNewSpot({ ...newSpot, transparency: Number(e.target.value) });
+            }}
           />
           <FormControl fullWidth margin="dense">
             <InputLabel>Cleanliness</InputLabel>
             <Select
               value={newSpot?.cleanliness || ''}
-              onChange={(e) => setNewSpot({ ...newSpot, cleanliness: e.target.value as 'low' | 'medium' | 'high' })}
+              onChange={(e) => {
+                console.log("Updating spot cleanliness:", e.target.value);
+                setNewSpot({ ...newSpot, cleanliness: e.target.value as 'low' | 'medium' | 'high' });
+              }}
             >
               <MenuItem value="low">Low</MenuItem>
               <MenuItem value="medium">Medium</MenuItem>
@@ -145,7 +231,10 @@ function App() {
           </FormControl>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+          <Button onClick={() => {
+            console.log("Cancelling new spot");
+            setIsDialogOpen(false);
+          }}>Cancel</Button>
           <Button onClick={handleSaveSpot}>Save</Button>
         </DialogActions>
       </Dialog>
